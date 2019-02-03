@@ -5,6 +5,9 @@ authors = ["Artem Shein <sc-github@aisys.ru>"]
 edition = "2018"
 description = "A simple client library for Yandex ClickHouse"
 license = "MIT"
+repository = "https://github.com/artemshein/klickenhaus"
+keywords = ["database", "ClickHouse"]
+categories = ["database"]
 
 [dependencies]
 reqwest = "0.9.9"
