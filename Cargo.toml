@@ -1,0 +1,10 @@
+[package]
+name = "klickenhaus"
+version = "0.1.0"
+authors = ["Artem Shein <sc-github@aisys.ru>"]
+edition = "2018"
+description = "A simple client library for Yandex ClickHouse"
+
+[dependencies]
+reqwest = "0.9.9"
+failure = "0.1.5"
