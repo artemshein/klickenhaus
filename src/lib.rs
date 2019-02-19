@@ -1,5 +1,6 @@
 use failure::{Error, bail};
 use std::{ops::Index, fmt::Write};
+use std::borrow::Cow;
 
 
 pub struct ClickhouseClient {
@@ -44,7 +45,16 @@ impl ClickhouseClient {
 pub enum Value {
     I64(i64),
     U64(u64),
-    String(String),
+    F32(f32),
+    String(Cow<'static, str>),
+    OptionString(Option<Cow<'static, str>>),
+    VecString(Vec<Cow<'static, str>>)
+}
+
+impl From<f32> for Value {
+    fn from(v: f32) -> Self {
+        Value::F32(v)
+    }
 }
 
 impl From<i64> for Value {
@@ -65,15 +75,45 @@ impl From<u64> for Value {
     }
 }
 
-impl<'a> From<&'a str> for Value {
-    fn from(v: &str) -> Self {
-        Value::String(v.to_owned())
+impl From<u32> for Value {
+    fn from(v: u32) -> Self {
+        Value::U64(v as u64)
     }
 }
 
 impl From<String> for Value {
     fn from(v: String) -> Self {
-        Value::String(v)
+        Value::String(v.into())
+    }
+}
+
+impl From<&'static str> for Value {
+    fn from(v: &'static str) -> Self {
+        Value::String(v.into())
+    }
+}
+
+impl From<Option<String>> for Value {
+    fn from(v: Option<String>) -> Self {
+        Value::OptionString(v.map(Into::into))
+    }
+}
+
+impl From<Option<&'static str>> for Value {
+    fn from(v: Option<&'static str>) -> Self {
+        Value::OptionString(v.map(Into::into))
+    }
+}
+
+impl From<Vec<&'static str>> for Value {
+    fn from(v: Vec<&'static str>) -> Self {
+        Value::VecString(v.into_iter().map(Into::into).collect())
+    }
+}
+
+impl From<Vec<String>> for Value {
+    fn from(v: Vec<String>) -> Self {
+        Value::VecString(v.into_iter().map(Into::into).collect())
     }
 }
 
@@ -118,17 +158,36 @@ impl ClickhouseInsert {
                 match &column[row_idx] {
                     Value::I64(v) => write!(body, "{}", v)?,
                     Value::U64(v) => write!(body, "{}", v)?,
-                    Value::String(v) => write!(body, "'{}'", v.replace("\n", "\\n").replace("\r", "\\r").replace("\r", "\\r").replace("'", "\\'"))?,
+                    Value::F32(v) => write!(body, "{}", v)?,
+                    Value::String(v) => write!(body, "'{}'", escape_string(v))?,
+                    Value::OptionString(v) => match v {
+                        Some(s) => write!(body, "'{}'", escape_string(s))?,
+                        _ => write!(body, "NULL")?
+                    },
+                    Value::VecString(v) => {
+                        write!(body, "[")?;
+                        for (val_idx, val) in v.iter().enumerate() {
+                            if val_idx != 0 {
+                                write!(body, ",")?;
+                            }
+                            write!(body, "'{}'", escape_string(val))?;
+                        }
+                        write!(body, "]")?;
+                    },
                 };
             }
-            write!(body, ")")?;
+            write!(body, ")\n")?;
         }
-        let mut resp = reqwest::Client::new().post(&self.url).body(body.into_bytes()).send()?;
+        let mut resp = reqwest::Client::new().post(&(self.url + "?wait_end_of_query=1&max_query_size=100000000&max_rows_to_read=1000000000")).body(body.into_bytes()).send()?;
         if resp.status().as_u16() != 200 {
             bail!("insert failed: {}", resp.text()?);
         }
         Ok(())
     }
+}
+
+fn escape_string(s: &str) -> String {
+    s.replace("\n", "\\n").replace("\r", "\\r").replace("\r", "\\r").replace("'", "\\'")
 }
 
 pub struct ClickhouseRows {
@@ -142,6 +201,10 @@ impl ClickhouseRows {
             rows: response.split('\n').take_while(|s| !s.is_empty()).map(ToOwned::to_owned).collect(),
             index: 0,
         }
+    }
+
+    pub fn len(&self) -> usize {
+        self.rows.len()
     }
 }
 
@@ -182,15 +245,16 @@ fn test() -> Result<(), Error> {
         bail!("Ping failed");
     }
     ch.query("DROP TABLE IF EXISTS test_table")?;
-    ch.query("CREATE TABLE IF NOT EXISTS test_table (a Int32, b Enum8('a' = 1, 'b' = 2), c String) ENGINE=Log")?;
-    ch.query("INSERT INTO test_table (a, b, c) VALUES (10, 'a', 'test'), (20, 'b', 'test2\ttest3\ntest4\rtest5')")?;
-    ch.insert("INSERT INTO test_table (a, b, c)")
+    ch.query("CREATE TABLE IF NOT EXISTS test_table (a Int32, b Enum8('a' = 1, 'b' = 2), c String, d Array(String)) ENGINE=Log")?;
+    ch.query("INSERT INTO test_table (a, b, c, d) VALUES (10, 'a', 'test', ['abc', 'def']), (20, 'b', 'test2\ttest3\ntest4\rtest5', ['a\r\rbc', 'def', 'efg'])")?;
+    ch.insert("INSERT INTO test_table (a, b, c, d)")
         .column(vec![50, 60, 70, 80])
         .column(vec!["a", "b", "a", "b"])
         .column(vec!["str1", "str2", "str3", "str4"])
+        .column(vec![vec!["aaa", "bbb", "ccc"], vec!["ee", "ffff"], vec![], vec!["yo"]])
         .exec()?;
     for row in ch.select("SELECT * FROM test_table")? {
-        println!("'{}', '{}', '{}'", &row[0], &row[1], &row[2]);
+        println!("'{}', '{}', '{}', {}", &row[0], &row[1], &row[2], &row[3]);
     }
     ch.query("DROP TABLE test_table")?;
     Ok(())
