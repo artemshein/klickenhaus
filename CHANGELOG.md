@@ -1,3 +1,9 @@
+0.1.3
+=====
+
+* Add select_row method for client
+* Add rows support for insert 
+
 0.1.2
 =====
 
